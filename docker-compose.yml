@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: cryptowallet-postgres
+    environment:
+      POSTGRES_DB: cryptowallet
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cryptowallet-network
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: cryptowallet-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cryptowallet-network
+
+  # RabbitMQ消息队列
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: cryptowallet-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"   # AMQP端口
+      - "15672:15672" # 管理界面
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cryptowallet-network
+
+  # API服务
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cryptowallet-api
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./configs:/root/configs
+      - ./logs:/root/logs
+    command: ["./server"]
+    restart: unless-stopped
+    networks:
+      - cryptowallet-network
+
+  # Worker服务
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cryptowallet-worker
+    environment:
+      - GIN_MODE=release
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./configs:/root/configs
+      - ./logs:/root/logs
+    command: ["./worker"]
+    restart: unless-stopped
+    networks:
+      - cryptowallet-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+
+networks:
+  cryptowallet-network:
+    driver: bridge
